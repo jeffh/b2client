@@ -121,9 +121,9 @@ func (c *RetryClient) CopyPart(opt CopyPartOptions) (res CopyPartResponse, err e
 	return res, err
 }
 
-func (c *RetryClient) CreateBucket(opt CreateBucketOptions) (res BucketResponse, err error) {
+func (c *RetryClient) CreateBucket(bucketName string, bt BucketType, opt *CreateBucketOptions) (res BucketResponse, err error) {
 	err = c.genericRetryHandler(func() error {
-		res, err = c.C.CreateBucket(opt)
+		res, err = c.C.CreateBucket(bucketName, bt, opt)
 		return err
 	})
 	return res, err
