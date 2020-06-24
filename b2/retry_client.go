@@ -35,11 +35,13 @@ retry:
 	return true, true
 }
 
-func (c *RetryClient) InvalidateAuthorization() { c.C.LastAuth = nil }
+func (c *RetryClient) InvalidateAuthorization() { c.C.InvalidateAuthorization() }
 func (c *RetryClient) AuthorizeIfNeeded() (*AuthorizeAccountResponse, error) {
-	if c.C.LastAuth != nil {
-		return c.C.LastAuth, nil
+	auth := c.C.LastAuth()
+	if auth != nil {
+		return auth, nil
 	}
+
 	retries := uint32(0)
 	for {
 		res, err := c.C.Authorize(c.KeyId, c.AppKey)

@@ -8,6 +8,7 @@ import (
 	"io"
 	"net/http"
 	"strconv"
+	"sync"
 	"time"
 )
 
@@ -30,7 +31,24 @@ type Client struct {
 	UserAgent string
 	C         http.Client
 	L         Logger
-	LastAuth  *AuthorizeAccountResponse // last successful auth response
+	m         sync.Mutex
+	lastAuth  *AuthorizeAccountResponse // last successful auth response
+}
+
+func (c *Client) InvalidateAuthorization() {
+	c.m.Lock()
+	defer c.m.Unlock()
+	c.lastAuth = nil
+}
+
+func (c *Client) LastAuth() *AuthorizeAccountResponse {
+	c.m.Lock()
+	defer c.m.Unlock()
+	if c.lastAuth != nil {
+		auth := *c.lastAuth
+		return &auth
+	}
+	return nil
 }
 
 func (c *Client) logf(format string, values ...interface{}) {
@@ -81,24 +99,20 @@ func (c *Client) request(baseURL, method, endpoint string, body interface{}) (*h
 }
 
 func (c *Client) authRequest(method, endpoint string, body interface{}) (*http.Request, error) {
-	if c.LastAuth == nil {
+	auth := c.LastAuth()
+	if auth == nil {
 		return nil, ErrAuthTokenMissing
 	}
 
-	authToken := c.LastAuth.AuthorizationToken
-	req, err := c.request(c.LastAuth.APIURL, method, endpoint, body)
+	req, err := c.request(auth.APIURL, method, endpoint, body)
 	if err != nil {
 		return req, err
 	}
-	req.Header.Add("Authorization", authToken)
+	req.Header.Add("Authorization", auth.AuthorizationToken)
 	return req, err
 }
 
 func (c *Client) uploadRequest(uploadURL, uploadAuthToken string) (*http.Request, error) {
-	if c.LastAuth == nil {
-		return nil, ErrAuthTokenMissing
-	}
-
 	req, err := c.request(uploadURL, "POST", "", nil)
 	if err != nil {
 		return req, err
@@ -108,16 +122,16 @@ func (c *Client) uploadRequest(uploadURL, uploadAuthToken string) (*http.Request
 }
 
 func (c *Client) downloadRequest(method, endpoint string, body interface{}) (*http.Request, error) {
-	if c.LastAuth == nil {
+	auth := c.LastAuth()
+	if auth == nil {
 		return nil, ErrAuthTokenMissing
 	}
 
-	authToken := c.LastAuth.AuthorizationToken
-	req, err := c.request(c.LastAuth.DownloadURL, method, endpoint, body)
+	req, err := c.request(auth.DownloadURL, method, endpoint, body)
 	if err != nil {
 		return req, err
 	}
-	req.Header.Add("Authorization", authToken)
+	req.Header.Add("Authorization", auth.AuthorizationToken)
 	return req, err
 }
 
@@ -208,7 +222,9 @@ func (c *Client) Authorize(keyId, appKey string) (AuthorizeAccountResponse, erro
 	var r AuthorizeAccountResponse
 	err = c.do(req, &r)
 	if err == nil {
-		c.LastAuth = &r
+		c.m.Lock()
+		c.lastAuth = &r
+		c.m.Unlock()
 	}
 	return r, err
 }
@@ -319,7 +335,11 @@ func (c *Client) DeleteBucket(bucketId string) (BucketResponse, error) {
 		AccountId string `json:"accountId"`
 		BucketId  string `json:"bucketId"`
 	}
-	accountId := c.LastAuth.AccountID
+	auth := c.LastAuth()
+	if auth == nil {
+		return BucketResponse{}, ErrAuthTokenMissing
+	}
+	accountId := auth.AccountID
 	req, err := c.authRequest("POST", "/b2api/v2/b2_delete_bucket", &request{accountId, bucketId})
 	if err != nil {
 		return BucketResponse{}, err
@@ -532,8 +552,13 @@ func (c *Client) ListBuckets(opt *ListBucketsOptions) (ListBucketsResponse, erro
 		o = *opt
 	}
 
+	auth := c.LastAuth()
+	if auth == nil {
+		return ListBucketsResponse{}, ErrAuthTokenMissing
+	}
+
 	req, err := c.authRequest("POST", "/b2api/v2/b2_list_buckets", &request{
-		c.LastAuth.AccountID,
+		auth.AccountID,
 		o.BucketId,
 		o.BucketName,
 		o.BucketTypes,
@@ -630,8 +655,13 @@ func (c *Client) ListKeys(opt ListKeysOptions) (ListKeysResponse, error) {
 		StartApplicationKeyId string `json:"startApplicationKeyId"`
 	}
 
+	auth := c.LastAuth()
+	if auth == nil {
+		return ListKeysResponse{}, ErrAuthTokenMissing
+	}
+
 	req, err := c.authRequest("POST", "/b2api/v2/b2_list_keys", &request{
-		c.LastAuth.AccountID,
+		auth.AccountID,
 		opt.MaxKeyCount,
 		opt.StartAppKeyId,
 	})
@@ -741,8 +771,13 @@ func (c *Client) UpdateBucket(bucketId string, opt UpdateBucketOptions) (UpdateB
 		IfRevisionIs   *int            `json:"ifRevisionIs,omitempty"`
 	}
 
+	auth := c.LastAuth()
+	if auth == nil {
+		return UpdateBucketResponse{}, ErrAuthTokenMissing
+	}
+
 	req, err := c.authRequest("POST", "/b2api/v2/b2_update_bucket", &request{
-		c.LastAuth.AccountID,
+		auth.AccountID,
 		bucketId,
 		opt.BucketType,
 		opt.BucketInfo,
