@@ -6,7 +6,9 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"io/ioutil"
 	"net/http"
+	"os"
 	"strconv"
 	"sync"
 	"time"
@@ -24,6 +26,37 @@ type Logger interface {
 	Printf(format string, values ...interface{})
 }
 
+type TempStorage interface {
+	// Store returns the length of the given reader.
+	// It is expected to return a new reader with the same contents, the length of the reader, and any io error
+	// This is useful to transfer reader contents to some temporary storage to do this counting.
+	// Closing the return reader indicates that the storage for that reader's
+	// contents is no longer needed and can be cleaned up.
+	Store(r io.Reader) (rc io.ReadCloser, size int64, err error)
+}
+
+type TempFileStorage struct {
+	Dir     string
+	Pattern string
+}
+
+func (fs *TempFileStorage) Store(key string, r io.Reader) (io.ReadCloser, int64, error) {
+	f, err := ioutil.TempFile(fs.Dir, fs.Pattern)
+	if err != nil {
+		return nil, 0, err
+	}
+	n, err := io.Copy(f, r)
+	if err != nil {
+		return nil, 0, err
+	}
+	_, err = f.Seek(0, os.SEEK_SET)
+	if err != nil {
+		return nil, 0, err
+	}
+
+	return f, n, nil
+}
+
 // Client manages most of the low-level operations.
 // Client is not thread safe.
 type Client struct {
@@ -31,8 +64,10 @@ type Client struct {
 	UserAgent string
 	C         http.Client
 	L         Logger
-	m         sync.Mutex
-	lastAuth  *AuthorizeAccountResponse // last successful auth response
+	TS        TempStorage // used for uploads
+
+	m        sync.Mutex
+	lastAuth *AuthorizeAccountResponse // last successful auth response
 }
 
 func (c *Client) InvalidateAuthorization() {
@@ -838,28 +873,59 @@ func (c *Client) UploadFile(uploadURL, authToken string, opt UploadFileOptions) 
 		return UploadFileResponse{}, err
 	}
 
-	opt.setOnRequest(req)
+	err = opt.setOnRequest(req, c.TS)
+	if err != nil {
+		return UploadFileResponse{}, err
+	}
 
 	var r UploadFileResponse
 	err = c.do(req, &r)
 	return r, err
 }
 
-func (opt *UploadFileOptions) setOnRequest(r *http.Request) {
+func readerLength(ts TempStorage, r io.ReadCloser) (io.ReadCloser, int64, error) {
+	if ts == nil {
+		buf := bytes.NewBuffer(nil)
+		n, err := io.Copy(buf, r)
+		if err != nil {
+			return nil, 0, err
+		}
+		return Closer(buf), n, r.Close()
+	} else {
+		f, n, err := ts.Store(r)
+		if err != nil {
+			return nil, 0, err
+		}
+		return f, n, r.Close()
+	}
+}
+
+func (opt *UploadFileOptions) setOnRequest(r *http.Request, ts TempStorage) error {
 	r.Header.Set("X-Bz-File-Name", opt.FileName)
 	if opt.ContentType == "" {
 		r.Header.Set("Content-Type", ContentTypeAuto)
 	} else {
 		r.Header.Set("Content-Type", opt.ContentType)
 	}
+
+	var body = opt.Body
 	length := opt.ContentLength
+
+	if length < 0 {
+		var err error
+		body, length, err = readerLength(ts, body)
+		if err != nil {
+			return err
+		}
+	}
+
 	if opt.ContentSha1 == "" || opt.ContentSha1 == Sha1AtEnd {
-		rdr := &HashedPostfixedReader{R: opt.Body, H: sha1.New()}
+		rdr := &HashedPostfixedReader{R: body, H: sha1.New()}
 		r.Body = rdr
 		length += 40 // sha1 -> hex is 40 bytes
 		r.Header.Set("X-Bz-Content-Sha1", Sha1AtEnd)
 	} else {
-		r.Body = opt.Body
+		r.Body = body
 		r.Header.Set("X-Bz-Content-Sha1", opt.ContentSha1)
 	}
 	r.ContentLength = length
@@ -895,11 +961,12 @@ func (opt *UploadFileOptions) setOnRequest(r *http.Request) {
 	for k, v := range opt.ExtraHeaders {
 		r.Header.Set(k, v)
 	}
+	return nil
 }
 
 type UploadFilePartOptions struct {
 	ContentType   string        // required, use ContentTypeHide to hide, empty defaults to auto
-	ContentLength int           // required
+	ContentLength int64         // required, if negative use temp storage to buffer the result for caching
 	Body          io.ReadCloser // required
 	ContentSha1   string        // required, sha1 of the part being uploaded, leave empty to interpret from body
 }
@@ -910,27 +977,42 @@ func (c *Client) UploadPart(uploadPartURL, uploadPartAuthToken string, opt Uploa
 		return UploadPartResponse{}, err
 	}
 
-	opt.setOnRequest(req)
+	err = opt.setOnRequest(req, c.TS)
+	if err != nil {
+		return UploadPartResponse{}, err
+	}
 
 	var r UploadPartResponse
 	err = c.do(req, &r)
 	return r, err
 }
 
-func (opt *UploadFilePartOptions) setOnRequest(r *http.Request) {
+func (opt *UploadFilePartOptions) setOnRequest(r *http.Request, ts TempStorage) error {
 	if opt.ContentType == "" {
 		r.Header.Set("Content-Type", ContentTypeAuto)
 	} else {
 		r.Header.Set("Content-Type", opt.ContentType)
 	}
+
+	var body = opt.Body
 	length := opt.ContentLength
+
+	if length < 0 {
+		var err error
+		body, length, err = readerLength(ts, body)
+		if err != nil {
+			return err
+		}
+	}
+
 	if opt.ContentSha1 == "" {
 		rdr := &HashedPostfixedReader{R: opt.Body, H: sha1.New()}
 		r.Body = rdr
-		length += rdr.H.Size()
+		length += 40 // sha1 -> hex is 40 bytes
 	} else {
 		r.Body = opt.Body
 		r.Header.Set("X-Bz-Content-Sha1", opt.ContentSha1)
 	}
-	r.Header.Set("Content-Length", strconv.Itoa(length))
+	r.ContentLength = length
+	return nil
 }

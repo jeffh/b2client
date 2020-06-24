@@ -6,6 +6,7 @@ import (
 )
 
 const ClientVersion = "0.1.0"
+const ContentLengthDetermineUsingTempStorage = -1
 
 func DefaultUserAgent() string {
 	return fmt.Sprintf("net.jeffhui.b2client/%s+%s", ClientVersion, runtime.Version())
@@ -80,7 +81,7 @@ type Action string
 const (
 	ActionStart  = "start"  // a large file has been started, but not finished or canceled
 	ActionUpload = "upload" // a file was uploaded to B2
-	ActionHide   = "hide"   //file version marking the file as hidden, so it doesn't show up in list_file_names
+	ActionHide   = "hide"   // file version marking the file as hidden, so it doesn't show up in list_file_names
 	ActionFolder = "folder" // virtual folder when listing files
 )
 

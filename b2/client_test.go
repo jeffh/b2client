@@ -40,9 +40,10 @@ func TestFileManagement(t *testing.T) {
 	t.Run("Uploading a file", func(t *testing.T) {
 		buf := bytes.NewBufferString("Hello world")
 		res, err := c.UploadFile(integrationConfig.BucketID, UploadFileOptions{
-			FileName:      "test",
-			ContentType:   ContentTypeText,
-			ContentLength: int64(buf.Len()),
+			FileName:    "test",
+			ContentType: ContentTypeText,
+			// ContentLength: int64(buf.Len()),
+			ContentLength: ContentLengthDetermineUsingTempStorage,
 			Body:          Closer(buf),
 		})
 
