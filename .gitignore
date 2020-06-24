@@ -1,0 +1,6 @@
+bin
+.DS_Store
+tags
+result
+*.out
+profile*
