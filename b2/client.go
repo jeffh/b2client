@@ -288,17 +288,37 @@ func (c *Client) CopyPart(opt CopyPartOptions) (CopyPartResponse, error) {
 }
 
 type CreateBucketOptions struct {
-	AccountId      string          `json:"accountId"`  // required
-	BucketName     string          `json:"bucketName"` // required
-	BucketType     BucketType      `json:"bucketType"` // required
-	BucketInfo     BucketInfo      `json:"bucketInfo,omitempty"`
-	CorsRules      []CorsRule      `json:"corsRules,omitempty"`
-	LifecycleRules []LifecycleRule `json:"lifecycleRules,omitempty"`
+	BucketInfo     BucketInfo      // optional
+	CorsRules      []CorsRule      // optional
+	LifecycleRules []LifecycleRule // optional
 }
 
 // CreateBucket creates a new bucket in the given account. Requires Authorize to be called first.
-func (c *Client) CreateBucket(opt CreateBucketOptions) (BucketResponse, error) {
-	req, err := c.authRequest("POST", "/b2api/v2/b2_create_bucket", &opt)
+func (c *Client) CreateBucket(bucketName string, bt BucketType, opt *CreateBucketOptions) (BucketResponse, error) {
+	type request struct {
+		AccountId      string          `json:"accountId"`  // required
+		BucketName     string          `json:"bucketName"` // required
+		BucketType     BucketType      `json:"bucketType"` // required
+		BucketInfo     BucketInfo      `json:"bucketInfo,omitempty"`
+		CorsRules      []CorsRule      `json:"corsRules,omitempty"`
+		LifecycleRules []LifecycleRule `json:"lifecycleRules,omitempty"`
+	}
+	var o CreateBucketOptions
+	if opt != nil {
+		o = *opt
+	}
+	auth := c.LastAuth()
+	if auth == nil {
+		return BucketResponse{}, ErrAuthTokenMissing
+	}
+	req, err := c.authRequest("POST", "/b2api/v2/b2_create_bucket", &request{
+		auth.AccountID,
+		bucketName,
+		bt,
+		o.BucketInfo,
+		o.CorsRules,
+		o.LifecycleRules,
+	})
 	if err != nil {
 		return BucketResponse{}, err
 	}
