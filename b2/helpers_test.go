@@ -96,7 +96,7 @@ func liveTestRetryClient(t *testing.T, allowReuse bool) (clt *RetryClient, ok bo
 	}
 	creds := CredentialsFromEnvPrefix("TEST_")
 	clt = &RetryClient{
-		KeyId:  creds.KeyID,
+		KeyID:  creds.KeyID,
 		AppKey: creds.AppKey,
 		C:      Client{L: log.New(os.Stdout, "[LiveTestRetryClient] ", log.LstdFlags)},
 	}

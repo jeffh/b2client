@@ -9,7 +9,7 @@ import (
 )
 
 type RetryClient struct {
-	KeyId, AppKey string
+	KeyID, AppKey string
 
 	C  Client
 	RC RetryConfig
@@ -44,7 +44,7 @@ func (c *RetryClient) AuthorizeIfNeeded() (*AuthorizeAccountResponse, error) {
 
 	retries := uint32(0)
 	for {
-		res, err := c.C.Authorize(c.KeyId, c.AppKey)
+		res, err := c.C.Authorize(c.KeyID, c.AppKey)
 		if err != nil {
 			timedOut, tooManyAttempts := c.isTimeoutAndThenWait(err, retries)
 			if timedOut {
