@@ -106,26 +106,26 @@ type Bucket struct {
 }
 
 type File struct {
-	AccountID       string   `json:"accountId"`
-	BucketID        string   `json:"bucketId"`
-	FileID          string   `json:"fileId"`
-	FileName        string   `json:"fileName"`
-	Action          Action   `json:"action"`
-	ContentLength   int64    `json:"contentLength"`
-	ContentSha1     string   `json:"contentSha1"`
-	ContentMd5      string   `json:"contentMd5,omitempty"`
-	ContentType     string   `json:"contentType"`
-	FileInfo        FileInfo `json:"fileInfo"`
-	UploadTimestamp int64    `json:"uploadTimestamp"`
+	AccountID             string   `json:"accountId"`
+	BucketID              string   `json:"bucketId"`
+	FileID                string   `json:"fileId"`
+	FileName              string   `json:"fileName"`
+	Action                Action   `json:"action"`
+	ContentLength         int64    `json:"contentLength"`
+	ContentSha1           string   `json:"contentSha1"`
+	ContentMd5            string   `json:"contentMd5,omitempty"`
+	ContentType           string   `json:"contentType"`
+	FileInfo              FileInfo `json:"fileInfo"`
+	UploadTimestampMillis int64    `json:"uploadTimestamp"`
 }
 
 type FilePart struct {
-	FileID          string `json:"fileId"`
-	PartNumber      int    `json:"partNumber"`
-	ContentLength   string `json:"contentLength"`
-	ContentSha1     string `json:"contentSha1"`
-	ContentMd5      string `json:"contentMd5,omitempty"`
-	UploadTimestamp int64  `json:"uploadTimestamp"`
+	FileID                string `json:"fileId"`
+	PartNumber            int    `json:"partNumber"`
+	ContentLength         string `json:"contentLength"`
+	ContentSha1           string `json:"contentSha1"`
+	ContentMd5            string `json:"contentMd5,omitempty"`
+	UploadTimestampMillis int64  `json:"uploadTimestamp"`
 }
 
 type Key struct {
