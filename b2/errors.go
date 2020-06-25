@@ -32,6 +32,7 @@ type ErrorResponse struct {
 func (e *ErrorResponse) IsBadRequest() bool         { return e.Status == 400 }
 func (e *ErrorResponse) IsUnauthorized() bool       { return e.Status == 401 }
 func (e *ErrorResponse) IsForbidden() bool          { return e.Status == 403 }
+func (e *ErrorResponse) IsNotFound() bool           { return e.Status == 404 }
 func (e *ErrorResponse) IsRequestTimeout() bool     { return e.Status == 408 }
 func (e *ErrorResponse) IsTooManyRequests() bool    { return e.Status == 429 }
 func (e *ErrorResponse) IsInternalError() bool      { return e.Status == 500 }
