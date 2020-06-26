@@ -80,7 +80,7 @@ func (c *RetryClient) genericRetryHandler(f func() error) error {
 					continue
 				}
 			}
-			if err, ok := err.(*ErrorResponse); ok && err.IsForbidden() {
+			if err, ok := err.(*ErrorResponse); ok && (err.IsForbidden() || (err.IsUnauthorized() && err.Code == ErrCodeExpiredAuthToken)) {
 				if err.RetryAfter > 0 {
 					time.Sleep(err.RetryAfter)
 				} else {

@@ -43,7 +43,7 @@ func (e *ErrorResponse) Timeout() bool {
 }
 
 func (e *ErrorResponse) Error() string {
-	return fmt.Sprintf("%d: %s - %s", e.Status, e.Code, e.Message)
+	return fmt.Sprintf("%d: %s %s", e.Status, e.Code, e.Message)
 }
 
 const (
