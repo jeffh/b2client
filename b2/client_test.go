@@ -37,6 +37,11 @@ func TestFileManagement(t *testing.T) {
 		return
 	}
 
+	var fileToDelete = struct {
+		Name   string
+		FileID string
+	}{}
+
 	t.Run("Uploading a file", func(t *testing.T) {
 		buf := bytes.NewBufferString("Hello world")
 		res, err := c.UploadFile(integrationConfig.BucketID, UploadFileOptions{
@@ -62,6 +67,9 @@ func TestFileManagement(t *testing.T) {
 		if res.Action != ActionUpload {
 			t.Fatalf("Expected state of uploaded file to match (%#v != %#v)", res.Action, ActionUpload)
 		}
+
+		fileToDelete.Name = res.FileName
+		fileToDelete.FileID = res.FileID
 	})
 
 	t.Run("Listing files", func(t *testing.T) {
@@ -72,6 +80,32 @@ func TestFileManagement(t *testing.T) {
 
 		if len(listedFiles.Files) == 0 {
 			t.Fatalf("Failed to list files: %#v", listedFiles.Files)
+		}
+	})
+
+	t.Run("Listing file versions", func(t *testing.T) {
+		listedFileVersions, err := c.ListFileVersions(integrationConfig.BucketID, nil)
+		if err != nil {
+			t.Fatalf("Failed to list files: %s", err)
+		}
+
+		if len(listedFileVersions.Files) == 0 {
+			t.Fatalf("Failed to list files: %#v", listedFileVersions.Files)
+		}
+	})
+
+	t.Run("Deleting files", func(t *testing.T) {
+		res, err := c.DeleteFileVersion(fileToDelete.FileID, fileToDelete.Name)
+		if err != nil {
+			t.Fatalf("Failed to delete file: %s", err)
+		}
+
+		if res.FileID != fileToDelete.FileID {
+			t.Fatalf("Expected FileIDs to match when deleting: %#v != %#v", res.FileID, fileToDelete.FileID)
+		}
+
+		if res.FileName != fileToDelete.FileName {
+			t.Fatalf("Expected FileNames to match when deleting: %#v != %#v", res.FileName, fileToDelete.FileName)
 		}
 	})
 }

@@ -223,7 +223,7 @@ func (c *RetryClient) ListFileNames(bucketId string, opt *ListFileNamesOptions) 
 	return res, err
 }
 
-func (c *RetryClient) ListFileVersions(bucketId string, opt ListFileVersionsOptions) (res ListFileVersionsResponse, err error) {
+func (c *RetryClient) ListFileVersions(bucketId string, opt *ListFileVersionsOptions) (res ListFileVersionsResponse, err error) {
 	err = c.genericRetryHandler(func() error {
 		res, err = c.C.ListFileVersions(bucketId, opt)
 		return err

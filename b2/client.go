@@ -473,15 +473,17 @@ func (opt DownloadFileOptions) setOnRequest(req *http.Request, fileId string) {
 	req.URL.RawQuery = q.Encode()
 }
 
-// DownloadFileById downloads a file using the authorization previously retrieved via Authorize.
+// DownloadFileByID downloads a file using the authorization previously retrieved via Authorize.
 // Requires readFiles capabilities
-func (c *Client) DownloadFileById(fileId string, opt DownloadFileOptions) (*http.Response, error) {
+func (c *Client) DownloadFileByID(fileId string, opt *DownloadFileOptions) (*http.Response, error) {
 	req, err := c.downloadRequest("GET", "/b2api/v2/b2_download_file_by_id", nil)
 	if err != nil {
 		return nil, err
 	}
 
-	opt.setOnRequest(req, fileId)
+	if opt != nil {
+		opt.setOnRequest(req, fileId)
+	}
 
 	return c.doRaw(req)
 }
@@ -671,7 +673,7 @@ type ListFileVersionsOptions struct {
 	Delimiter     string // optional, empty means list all files, "/" means list top level files and folders
 }
 
-func (c *Client) ListFileVersions(bucketId string, opt ListFileVersionsOptions) (ListFileVersionsResponse, error) {
+func (c *Client) ListFileVersions(bucketId string, opt *ListFileVersionsOptions) (ListFileVersionsResponse, error) {
 	type request struct {
 		BucketId      string `json:"bucketId"`
 		StartFileName string `json:"startFileName,omitempty"`
@@ -681,13 +683,18 @@ func (c *Client) ListFileVersions(bucketId string, opt ListFileVersionsOptions) 
 		Delimiter     string `json:"delimiter,omitempty"`
 	}
 
+	var o ListFileVersionsOptions
+	if opt != nil {
+		o = *opt
+	}
+
 	req, err := c.authRequest("POST", "/b2api/v2/b2_list_file_versions", &request{
 		bucketId,
-		opt.StartFileName,
-		opt.StartFileId,
-		opt.MaxFileCount,
-		opt.Prefix,
-		opt.Delimiter,
+		o.StartFileName,
+		o.StartFileId,
+		o.MaxFileCount,
+		o.Prefix,
+		o.Delimiter,
 	})
 	if err != nil {
 		return ListFileVersionsResponse{}, err
