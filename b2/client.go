@@ -481,9 +481,11 @@ func (c *Client) DownloadFileByID(fileId string, opt *DownloadFileOptions) (*htt
 		return nil, err
 	}
 
+	var o DownloadFileOptions
 	if opt != nil {
-		opt.setOnRequest(req, fileId)
+		o = *opt
 	}
+	o.setOnRequest(req, fileId)
 
 	return c.doRaw(req)
 }
