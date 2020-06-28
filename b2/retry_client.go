@@ -157,12 +157,12 @@ func (c *RetryClient) DeleteKey(appKeyId string) (res KeyResponse, err error) {
 	})
 	return res, err
 }
-func (c *RetryClient) DownloadFileById(fileId string, opt DownloadFileOptions) (res *http.Response, err error) {
+func (c *RetryClient) DownloadFileById(fileId string, opt *DownloadFileOptions) (res *http.Response, err error) {
 	err = c.genericRetryHandler(func() error {
 		if res != nil && res.Body != nil {
 			res.Body.Close()
 		}
-		res, err = c.C.DownloadFileById(fileId, opt)
+		res, err = c.C.DownloadFileByID(fileId, opt)
 		return err
 	})
 	return res, err
