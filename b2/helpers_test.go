@@ -7,16 +7,19 @@ import (
 	"testing"
 )
 
-func runIntegrationTests() bool { return true }
-
 var integrationConfig = struct {
 	BucketID   string
 	BucketName string
 }{}
 
+var integrationTests bool = true
+
+func runIntegrationTests() bool { return integrationTests }
+
 func init() {
 	integrationConfig.BucketID = os.Getenv("TEST_B2_BUCKET_ID")
 	integrationConfig.BucketName = os.Getenv("TEST_B2_BUCKET_NAME")
+	integrationTests = os.Getenv("TEST_B2_INTEGRATION_TESTS") == "true"
 
 	if integrationConfig.BucketID == "" {
 		panic(fmt.Errorf("TEST_B2_BUCKET_ID is missing"))
