@@ -1,4 +1,4 @@
-.PHONY: test
+.PHONY: test integration_tests
 
 GO := $(shell which go)
 
@@ -7,3 +7,6 @@ GO := $(shell which go)
 
 test:
 	$(GO) test $(GOARGS) ./...
+
+integration_tests:
+	env TEST_B2_INTEGRATION_TESTS=true $(GO) test $(GOARGS) ./...
