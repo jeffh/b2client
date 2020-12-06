@@ -104,8 +104,8 @@ func TestFileManagement(t *testing.T) {
 			t.Fatalf("Expected FileIDs to match when deleting: %#v != %#v", res.FileID, fileToDelete.FileID)
 		}
 
-		if res.FileName != fileToDelete.FileName {
-			t.Fatalf("Expected FileNames to match when deleting: %#v != %#v", res.FileName, fileToDelete.FileName)
+		if res.FileName != fileToDelete.Name {
+			t.Fatalf("Expected FileNames to match when deleting: %#v != %#v", res.FileName, fileToDelete.Name)
 		}
 	})
 }
