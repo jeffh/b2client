@@ -1,4 +1,4 @@
-.PHONY: test integration_tests
+.PHONY: test integration_tests clean
 
 GO := $(shell which go)
 
@@ -8,5 +8,8 @@ GO := $(shell which go)
 test:
 	$(GO) test $(GOARGS) ./...
 
-integration_tests:
+integration_tests: clean
 	env TEST_B2_INTEGRATION_TESTS=true $(GO) test $(GOARGS) ./...
+
+clean:
+	$(GO) clean -cache

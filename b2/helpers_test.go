@@ -21,12 +21,14 @@ func init() {
 	integrationConfig.BucketName = os.Getenv("TEST_B2_BUCKET_NAME")
 	integrationTests = os.Getenv("TEST_B2_INTEGRATION_TESTS") == "true"
 
-	if integrationConfig.BucketID == "" {
-		panic(fmt.Errorf("TEST_B2_BUCKET_ID is missing"))
-	}
+	if runIntegrationTests() {
+		if integrationConfig.BucketID == "" {
+			panic(fmt.Errorf("TEST_B2_BUCKET_ID is missing"))
+		}
 
-	if integrationConfig.BucketName == "" {
-		panic(fmt.Errorf("TEST_B2_BUCKET_NAME is missing"))
+		if integrationConfig.BucketName == "" {
+			panic(fmt.Errorf("TEST_B2_BUCKET_NAME is missing"))
+		}
 	}
 }
 
