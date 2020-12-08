@@ -2,6 +2,7 @@ package b2
 
 import (
 	"bytes"
+	"context"
 	"testing"
 )
 
@@ -11,7 +12,8 @@ func TestListingBuckets(t *testing.T) {
 		return
 	}
 
-	resp, err := c.ListBuckets(&ListBucketsOptions{BucketName: integrationConfig.BucketName})
+	ctx := context.Background()
+	resp, err := c.ListBuckets(ctx, &ListBucketsOptions{BucketName: integrationConfig.BucketName})
 	if err != nil {
 		t.Fatalf("Failed to list buckets: %s", err)
 	}
@@ -42,9 +44,11 @@ func TestFileManagement(t *testing.T) {
 		FileID string
 	}{}
 
+	ctx := context.Background()
+
 	t.Run("Uploading a file", func(t *testing.T) {
 		buf := bytes.NewBufferString("Hello world")
-		res, err := c.UploadFile(integrationConfig.BucketID, UploadFileOptions{
+		res, err := c.UploadFile(ctx, integrationConfig.BucketID, UploadFileOptions{
 			FileName:    "test",
 			ContentType: ContentTypeText,
 			// ContentLength: int64(buf.Len()),
@@ -73,7 +77,7 @@ func TestFileManagement(t *testing.T) {
 	})
 
 	t.Run("Listing files", func(t *testing.T) {
-		listedFiles, err := c.ListFileNames(integrationConfig.BucketID, nil)
+		listedFiles, err := c.ListFileNames(ctx, integrationConfig.BucketID, nil)
 		if err != nil {
 			t.Fatalf("Failed to list files: %s", err)
 		}
@@ -84,7 +88,7 @@ func TestFileManagement(t *testing.T) {
 	})
 
 	t.Run("Listing file versions", func(t *testing.T) {
-		listedFileVersions, err := c.ListFileVersions(integrationConfig.BucketID, nil)
+		listedFileVersions, err := c.ListFileVersions(ctx, integrationConfig.BucketID, nil)
 		if err != nil {
 			t.Fatalf("Failed to list files: %s", err)
 		}
@@ -95,7 +99,7 @@ func TestFileManagement(t *testing.T) {
 	})
 
 	t.Run("Deleting files", func(t *testing.T) {
-		res, err := c.DeleteFileVersion(fileToDelete.FileID, fileToDelete.Name)
+		res, err := c.DeleteFileVersion(ctx, fileToDelete.FileID, fileToDelete.Name)
 		if err != nil {
 			t.Fatalf("Failed to delete file: %s", err)
 		}

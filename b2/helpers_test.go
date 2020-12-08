@@ -1,6 +1,7 @@
 package b2
 
 import (
+	"context"
 	"fmt"
 	"log"
 	"os"
@@ -78,7 +79,8 @@ func mustAuth(t *testing.T, clt *Client) (AuthorizeAccountResponse, bool) {
 		return AuthorizeAccountResponse{}, false
 	}
 
-	resp, err := clt.Authorize(creds.KeyID, creds.AppKey)
+	ctx := context.Background()
+	resp, err := clt.Authorize(ctx, creds.KeyID, creds.AppKey)
 	if err != nil {
 		t.Fatalf("Expected authorization to not error: got -- %s", err)
 		return resp, false

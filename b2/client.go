@@ -2,6 +2,7 @@ package b2
 
 import (
 	"bytes"
+	"context"
 	"crypto/sha1"
 	"encoding/json"
 	"fmt"
@@ -22,10 +23,13 @@ const (
 	testCapExceeded      = false
 )
 
+// Logger is the interface for B2 Client Logging
 type Logger interface {
 	Printf(format string, values ...interface{})
 }
 
+// TempStorage is the interface to provide temporary storage for B2 Client to
+// store objects during multipart uploads
 type TempStorage interface {
 	// Store returns the length of the given reader.
 	// It is expected to return a new reader with the same contents, the length of the reader, and any io error
@@ -35,12 +39,16 @@ type TempStorage interface {
 	Store(r io.Reader) (rc io.ReadCloser, size int64, err error)
 }
 
+// TempFileStorage implements a local-filesystem based TempStorage using the
+// Operating System's temporary file storage.
 type TempFileStorage struct {
 	Dir     string
 	Pattern string
 }
 
-func (fs *TempFileStorage) Store(key string, r io.Reader) (io.ReadCloser, int64, error) {
+var _ TempStorage = (*TempFileStorage)(nil)
+
+func (fs *TempFileStorage) Store(r io.Reader) (io.ReadCloser, int64, error) {
 	f, err := ioutil.TempFile(fs.Dir, fs.Pattern)
 	if err != nil {
 		return nil, 0, err
@@ -57,14 +65,14 @@ func (fs *TempFileStorage) Store(key string, r io.Reader) (io.ReadCloser, int64,
 	return f, n, nil
 }
 
-// Client manages most of the low-level operations.
+// Client manages most of the low-level operations for the B2 API.
 // Client is not thread safe.
+// Most likely you're looking for RetryClient
 type Client struct {
-	AuthURL   string
-	UserAgent string
-	C         http.Client
-	L         Logger
-	TS        TempStorage // used for uploads
+	UserAgent string      // UserAgent for us to B2 (Defaults to DefaultUserAgent())
+	C         http.Client // Underlying HTTP Client
+	L         Logger      // nilable, optional logger
+	TS        TempStorage // nilable, used for temp storage of uploads
 
 	m        sync.Mutex
 	lastAuth *AuthorizeAccountResponse // last successful auth response
@@ -99,14 +107,14 @@ func (c *Client) getUserAgent() string {
 	return c.UserAgent
 }
 
-func (c *Client) request(baseURL, method, endpoint string, body interface{}) (*http.Request, error) {
+func (c *Client) request(ctx context.Context, baseURL, method, endpoint string, body interface{}) (*http.Request, error) {
 	if baseURL == "" {
 		baseURL = "https://api.backblazeb2.com"
 	}
 	var req *http.Request
 	var err error
 	if body == nil {
-		req, err = http.NewRequest(method, baseURL+endpoint, nil)
+		req, err = http.NewRequestWithContext(ctx, method, baseURL+endpoint, nil)
 	} else {
 		buf := &bytes.Buffer{}
 		e := json.NewEncoder(buf)
@@ -133,13 +141,13 @@ func (c *Client) request(baseURL, method, endpoint string, body interface{}) (*h
 	return req, err
 }
 
-func (c *Client) authRequest(method, endpoint string, body interface{}) (*http.Request, error) {
+func (c *Client) authRequest(ctx context.Context, method, endpoint string, body interface{}) (*http.Request, error) {
 	auth := c.LastAuth()
 	if auth == nil {
 		return nil, ErrAuthTokenMissing
 	}
 
-	req, err := c.request(auth.APIURL, method, endpoint, body)
+	req, err := c.request(ctx, auth.APIURL, method, endpoint, body)
 	if err != nil {
 		return req, err
 	}
@@ -147,8 +155,8 @@ func (c *Client) authRequest(method, endpoint string, body interface{}) (*http.R
 	return req, err
 }
 
-func (c *Client) uploadRequest(uploadURL, uploadAuthToken string) (*http.Request, error) {
-	req, err := c.request(uploadURL, "POST", "", nil)
+func (c *Client) uploadRequest(ctx context.Context, uploadURL, uploadAuthToken string) (*http.Request, error) {
+	req, err := c.request(ctx, uploadURL, "POST", "", nil)
 	if err != nil {
 		return req, err
 	}
@@ -156,13 +164,13 @@ func (c *Client) uploadRequest(uploadURL, uploadAuthToken string) (*http.Request
 	return req, err
 }
 
-func (c *Client) downloadRequest(method, endpoint string, body interface{}) (*http.Request, error) {
+func (c *Client) downloadRequest(ctx context.Context, method, endpoint string, body interface{}) (*http.Request, error) {
 	auth := c.LastAuth()
 	if auth == nil {
 		return nil, ErrAuthTokenMissing
 	}
 
-	req, err := c.request(auth.DownloadURL, method, endpoint, body)
+	req, err := c.request(ctx, auth.DownloadURL, method, endpoint, body)
 	if err != nil {
 		return req, err
 	}
@@ -247,9 +255,11 @@ func (c *Client) doRaw(req *http.Request) (*http.Response, error) {
 	return res, nil
 }
 
-// Authorize exchanges a keyId and appKey for an authorization token. Auth tokens can be used for other API calls.
-func (c *Client) Authorize(keyId, appKey string) (AuthorizeAccountResponse, error) {
-	req, err := c.request("", "GET", "/b2api/v2/b2_authorize_account", nil)
+// Authorize exchanges a keyId and appKey for an authorization token. Auth
+// tokens can be used for other API calls. Stores authorization for future API
+// calls.
+func (c *Client) Authorize(ctx context.Context, keyId, appKey string) (AuthorizeAccountResponse, error) {
+	req, err := c.request(ctx, "", "GET", "/b2api/v2/b2_authorize_account", nil)
 	if err != nil {
 		return AuthorizeAccountResponse{}, err
 	}
@@ -265,8 +275,8 @@ func (c *Client) Authorize(keyId, appKey string) (AuthorizeAccountResponse, erro
 }
 
 // CancelLargeFile cancels an inprogress file upload. Requires Authorize to be called first.
-func (c *Client) CancelLargeFile(fileId string) (CancelLargeFileResponse, error) {
-	req, err := c.authRequest("POST", "/b2api/v2/b2_cancel_large_file", &requestByFileID{fileId})
+func (c *Client) CancelLargeFile(ctx context.Context, fileId string) (CancelLargeFileResponse, error) {
+	req, err := c.authRequest(ctx, "POST", "/b2api/v2/b2_cancel_large_file", &requestByFileID{fileId})
 	if err != nil {
 		return CancelLargeFileResponse{}, err
 	}
@@ -276,24 +286,27 @@ func (c *Client) CancelLargeFile(fileId string) (CancelLargeFileResponse, error)
 	return r, err
 }
 
+type MetadataDirective string
+
 const (
-	MetadataDirectiveCopy    = "COPY"
-	MetadataDirectiveReplace = "REPLACE"
+	MetadataDirectiveNone    MetadataDirective = ""
+	MetadataDirectiveCopy                      = "COPY"
+	MetadataDirectiveReplace                   = "REPLACE"
 )
 
 type CopyFileOptions struct {
-	SourceFileId        string   `json:"sourceFileId"` // required
-	FileName            string   `json:"fileName"`     // required
-	DestinationBucketId string   `json:"destinationBucketId,omitempty"`
-	Range               string   `json:"range,omitempty"` // in form: "bytes=1000-2000"
-	MetadataDirective   string   `json:"metadataDirective,omitempty"`
-	ContentType         string   `json:"contentType,omitempty"`
-	FileInfo            FileInfo `json:"fileInfo,omitempty"`
+	SourceFileId        string            `json:"sourceFileId"` // required
+	FileName            string            `json:"fileName"`     // required
+	DestinationBucketId string            `json:"destinationBucketId,omitempty"`
+	Range               string            `json:"range,omitempty"` // in form: "bytes=1000-2000"
+	MetadataDirective   MetadataDirective `json:"metadataDirective,omitempty"`
+	ContentType         string            `json:"contentType,omitempty"`
+	FileInfo            FileInfo          `json:"fileInfo,omitempty"`
 }
 
 // CopyFile copies a file in the bucket to another location. Requires Authorize to be called first.
-func (c *Client) CopyFile(opt CopyFileOptions) (CopyFileResponse, error) {
-	req, err := c.authRequest("POST", "/b2api/v2/b2_copy_file", &opt)
+func (c *Client) CopyFile(ctx context.Context, opt CopyFileOptions) (CopyFileResponse, error) {
+	req, err := c.authRequest(ctx, "POST", "/b2api/v2/b2_copy_file", &opt)
 	if err != nil {
 		return CopyFileResponse{}, err
 	}
@@ -310,9 +323,10 @@ type CopyPartOptions struct {
 	Range        string `json:"range,omitempty"` // in form: "bytes=1000-2000"
 }
 
-// CopyPart copies a part of a file file in the bucket to another location. Requires Authorize to be called first.
-func (c *Client) CopyPart(opt CopyPartOptions) (CopyPartResponse, error) {
-	req, err := c.authRequest("POST", "/b2api/v2/b2_copy_part", &opt)
+// CopyPart copies a part of a large file in the bucket to another location.
+// Requires Authorize to be called first.
+func (c *Client) CopyPart(ctx context.Context, opt CopyPartOptions) (CopyPartResponse, error) {
+	req, err := c.authRequest(ctx, "POST", "/b2api/v2/b2_copy_part", &opt)
 	if err != nil {
 		return CopyPartResponse{}, err
 	}
@@ -329,7 +343,7 @@ type CreateBucketOptions struct {
 }
 
 // CreateBucket creates a new bucket in the given account. Requires Authorize to be called first.
-func (c *Client) CreateBucket(bucketName string, bt BucketType, opt *CreateBucketOptions) (BucketResponse, error) {
+func (c *Client) CreateBucket(ctx context.Context, bucketName string, bt BucketType, opt *CreateBucketOptions) (BucketResponse, error) {
 	type request struct {
 		AccountId      string          `json:"accountId"`  // required
 		BucketName     string          `json:"bucketName"` // required
@@ -346,7 +360,7 @@ func (c *Client) CreateBucket(bucketName string, bt BucketType, opt *CreateBucke
 	if auth == nil {
 		return BucketResponse{}, ErrAuthTokenMissing
 	}
-	req, err := c.authRequest("POST", "/b2api/v2/b2_create_bucket", &request{
+	req, err := c.authRequest(ctx, "POST", "/b2api/v2/b2_create_bucket", &request{
 		auth.AccountID,
 		bucketName,
 		bt,
@@ -373,8 +387,8 @@ type CreateKeyOptions struct {
 }
 
 // CreateKey creates a new API key with permissions. Requires Authorize to be called first.
-func (c *Client) CreateKey(opt CreateKeyOptions) (KeyResponse, error) {
-	req, err := c.authRequest("POST", "/b2api/v2/b2_create_key", &opt)
+func (c *Client) CreateKey(ctx context.Context, opt CreateKeyOptions) (KeyResponse, error) {
+	req, err := c.authRequest(ctx, "POST", "/b2api/v2/b2_create_key", &opt)
 	if err != nil {
 		return KeyResponse{}, err
 	}
@@ -385,7 +399,7 @@ func (c *Client) CreateKey(opt CreateKeyOptions) (KeyResponse, error) {
 }
 
 // DeleteBucket deletes an existing bucket within an account. Requires Authorize to be called first.
-func (c *Client) DeleteBucket(bucketId string) (BucketResponse, error) {
+func (c *Client) DeleteBucket(ctx context.Context, bucketId string) (BucketResponse, error) {
 	type request struct {
 		AccountId string `json:"accountId"`
 		BucketId  string `json:"bucketId"`
@@ -395,7 +409,7 @@ func (c *Client) DeleteBucket(bucketId string) (BucketResponse, error) {
 		return BucketResponse{}, ErrAuthTokenMissing
 	}
 	accountId := auth.AccountID
-	req, err := c.authRequest("POST", "/b2api/v2/b2_delete_bucket", &request{accountId, bucketId})
+	req, err := c.authRequest(ctx, "POST", "/b2api/v2/b2_delete_bucket", &request{accountId, bucketId})
 	if err != nil {
 		return BucketResponse{}, err
 	}
@@ -406,12 +420,12 @@ func (c *Client) DeleteBucket(bucketId string) (BucketResponse, error) {
 }
 
 // DeleteFileVersion deletes a version of a file. Requires Authorize to be called first.
-func (c *Client) DeleteFileVersion(fileId, fileName string) (DeleteFileResponse, error) {
+func (c *Client) DeleteFileVersion(ctx context.Context, fileId, fileName string) (DeleteFileResponse, error) {
 	type request struct {
 		FileId   string `json:"fileId"`
 		FileName string `json:"fileName"`
 	}
-	req, err := c.authRequest("POST", "/b2api/v2/b2_delete_file_version", &request{fileId, fileName})
+	req, err := c.authRequest(ctx, "POST", "/b2api/v2/b2_delete_file_version", &request{fileId, fileName})
 	if err != nil {
 		return DeleteFileResponse{}, err
 	}
@@ -422,11 +436,11 @@ func (c *Client) DeleteFileVersion(fileId, fileName string) (DeleteFileResponse,
 }
 
 // DeleteKey deletes an API key. Requires Authorize to be called first
-func (c *Client) DeleteKey(appKeyId string) (KeyResponse, error) {
+func (c *Client) DeleteKey(ctx context.Context, appKeyId string) (KeyResponse, error) {
 	type request struct {
 		AppKeyId string `json:"applicationKeyId"`
 	}
-	req, err := c.authRequest("POST", "/b2api/v2/b2_delete_key", &request{appKeyId})
+	req, err := c.authRequest(ctx, "POST", "/b2api/v2/b2_delete_key", &request{appKeyId})
 	if err != nil {
 		return KeyResponse{}, err
 	}
@@ -475,8 +489,8 @@ func (opt DownloadFileOptions) setOnRequest(req *http.Request, fileId string) {
 
 // DownloadFileByID downloads a file using the authorization previously retrieved via Authorize.
 // Requires readFiles capabilities
-func (c *Client) DownloadFileByID(fileId string, opt *DownloadFileOptions) (*http.Response, error) {
-	req, err := c.downloadRequest("GET", "/b2api/v2/b2_download_file_by_id", nil)
+func (c *Client) DownloadFileByID(ctx context.Context, fileId string, opt *DownloadFileOptions) (*http.Response, error) {
+	req, err := c.downloadRequest(ctx, "GET", "/b2api/v2/b2_download_file_by_id", nil)
 	if err != nil {
 		return nil, err
 	}
@@ -492,9 +506,9 @@ func (c *Client) DownloadFileByID(fileId string, opt *DownloadFileOptions) (*htt
 
 // DownloadFileByName downloads a file using the authorization previously retrieved via Authorize.
 // Requires readFiles capabilities
-func (c *Client) DownloadFileByName(bucketName, fileName string, opt DownloadFileOptions) (*http.Response, error) {
+func (c *Client) DownloadFileByName(ctx context.Context, bucketName, fileName string, opt DownloadFileOptions) (*http.Response, error) {
 	path := fmt.Sprintf("/files/%s/%s", bucketName, fileName)
-	req, err := c.downloadRequest("GET", path, nil)
+	req, err := c.downloadRequest(ctx, "GET", path, nil)
 	if err != nil {
 		return nil, err
 	}
@@ -504,14 +518,15 @@ func (c *Client) DownloadFileByName(bucketName, fileName string, opt DownloadFil
 	return c.doRaw(req)
 }
 
-// FinishLargeFile combines all previously uploaded file parts into one large file. Requires Authorize to have been called.
-// If this call times out, use GetFileInfo to verify if the file has been merged
-func (c *Client) FinishLargeFile(fileId string, partSha1s []string) (FinishLargeFileResponse, error) {
+// FinishLargeFile combines all previously uploaded file parts into one large
+// file. Requires Authorize to have been called. If this call times out, use
+// GetFileInfo to verify if the file has been merged
+func (c *Client) FinishLargeFile(ctx context.Context, fileId string, partSha1s []string) (FinishLargeFileResponse, error) {
 	type request struct {
 		FileId        string   `json:"fileId"`
 		PartSha1Array []string `json:"partSha1Array"`
 	}
-	req, err := c.authRequest("POST", "/b2api/v2/b2_finish_large_files", &request{fileId, partSha1s})
+	req, err := c.authRequest(ctx, "POST", "/b2api/v2/b2_finish_large_files", &request{fileId, partSha1s})
 	if err != nil {
 		return FinishLargeFileResponse{}, err
 	}
@@ -533,8 +548,11 @@ type GetDownloadAuthorizationOptions struct {
 	ContentType            string `json:"b2ContentType,omitempty"`        // optional, RFC 2616
 }
 
-func (c *Client) GetDownloadAuthorization(opt GetDownloadAuthorizationOptions) (GetDownloadAuthorizationResponse, error) {
-	req, err := c.authRequest("POST", "/b2api/v2/b2_get_download_authorization", opt)
+// GetDownloadAuthorization Generates a temporary authorization token to
+// download a file via DownloadFileByName. Requires Authorize to have been
+// called.
+func (c *Client) GetDownloadAuthorization(ctx context.Context, opt GetDownloadAuthorizationOptions) (GetDownloadAuthorizationResponse, error) {
+	req, err := c.authRequest(ctx, "POST", "/b2api/v2/b2_get_download_authorization", opt)
 	if err != nil {
 		return GetDownloadAuthorizationResponse{}, err
 	}
@@ -544,8 +562,10 @@ func (c *Client) GetDownloadAuthorization(opt GetDownloadAuthorizationOptions) (
 	return r, err
 }
 
-func (c *Client) GetFileInfo(fileId string) (GetFileInfoResponse, error) {
-	req, err := c.authRequest("POST", "/b2api/v2/b2_get_file_info", &requestByFileID{fileId})
+// GetFileInfo returns metadata about a file stored in B2. Requires Authorize
+// to have been called.
+func (c *Client) GetFileInfo(ctx context.Context, fileId string) (GetFileInfoResponse, error) {
+	req, err := c.authRequest(ctx, "POST", "/b2api/v2/b2_get_file_info", &requestByFileID{fileId})
 	if err != nil {
 		return GetFileInfoResponse{}, err
 	}
@@ -555,8 +575,8 @@ func (c *Client) GetFileInfo(fileId string) (GetFileInfoResponse, error) {
 	return r, err
 }
 
-func (c *Client) GetUploadPartURL(fileId string) (GetUploadPartURLResponse, error) {
-	req, err := c.authRequest("POST", "/b2api/v2/b2_get_upload_part_url", &requestByFileID{fileId})
+func (c *Client) GetUploadPartURL(ctx context.Context, fileId string) (GetUploadPartURLResponse, error) {
+	req, err := c.authRequest(ctx, "POST", "/b2api/v2/b2_get_upload_part_url", &requestByFileID{fileId})
 	if err != nil {
 		return GetUploadPartURLResponse{}, err
 	}
@@ -566,11 +586,11 @@ func (c *Client) GetUploadPartURL(fileId string) (GetUploadPartURLResponse, erro
 	return r, err
 }
 
-func (c *Client) GetUploadURL(bucketId string) (GetUploadURLResponse, error) {
+func (c *Client) GetUploadURL(ctx context.Context, bucketId string) (GetUploadURLResponse, error) {
 	type request struct {
 		BucketId string `json:"bucketId"`
 	}
-	req, err := c.authRequest("POST", "/b2api/v2/b2_get_upload_url", &request{bucketId})
+	req, err := c.authRequest(ctx, "POST", "/b2api/v2/b2_get_upload_url", &request{bucketId})
 	if err != nil {
 		return GetUploadURLResponse{}, err
 	}
@@ -580,8 +600,8 @@ func (c *Client) GetUploadURL(bucketId string) (GetUploadURLResponse, error) {
 	return r, err
 }
 
-func (c *Client) HideFile(bucketId, fileName string) (HideFileResponse, error) {
-	req, err := c.authRequest("POST", "/b2api/v2/b2_hide_file", &requestByFileName{bucketId, fileName})
+func (c *Client) HideFile(ctx context.Context, bucketId, fileName string) (HideFileResponse, error) {
+	req, err := c.authRequest(ctx, "POST", "/b2api/v2/b2_hide_file", &requestByFileName{bucketId, fileName})
 	if err != nil {
 		return HideFileResponse{}, err
 	}
@@ -597,7 +617,7 @@ type ListBucketsOptions struct {
 	BucketTypes []BucketType // optional
 }
 
-func (c *Client) ListBuckets(opt *ListBucketsOptions) (ListBucketsResponse, error) {
+func (c *Client) ListBuckets(ctx context.Context, opt *ListBucketsOptions) (ListBucketsResponse, error) {
 	type request struct {
 		AccountId   string       `json:"accountId"`             // required
 		BucketId    string       `json:"bucketId,omitempty"`    // optional
@@ -616,7 +636,7 @@ func (c *Client) ListBuckets(opt *ListBucketsOptions) (ListBucketsResponse, erro
 		return ListBucketsResponse{}, ErrAuthTokenMissing
 	}
 
-	req, err := c.authRequest("POST", "/b2api/v2/b2_list_buckets", &request{
+	req, err := c.authRequest(ctx, "POST", "/b2api/v2/b2_list_buckets", &request{
 		auth.AccountID,
 		o.BucketId,
 		o.BucketName,
@@ -638,7 +658,7 @@ type ListFileNamesOptions struct {
 	Delimiter     string // optional, empty means list all files, "/" means list top level files and folders
 }
 
-func (c *Client) ListFileNames(bucketId string, opt *ListFileNamesOptions) (ListFileNamesResponse, error) {
+func (c *Client) ListFileNames(ctx context.Context, bucketId string, opt *ListFileNamesOptions) (ListFileNamesResponse, error) {
 	type request struct {
 		BucketId      string `json:"bucketId"`
 		StartFileName string `json:"startFileName,omitempty"`
@@ -651,7 +671,7 @@ func (c *Client) ListFileNames(bucketId string, opt *ListFileNamesOptions) (List
 		o = *opt
 	}
 
-	req, err := c.authRequest("POST", "/b2api/v2/b2_list_file_names", &request{
+	req, err := c.authRequest(ctx, "POST", "/b2api/v2/b2_list_file_names", &request{
 		bucketId,
 		o.StartFileName,
 		o.MaxFileCount,
@@ -675,7 +695,7 @@ type ListFileVersionsOptions struct {
 	Delimiter     string // optional, empty means list all files, "/" means list top level files and folders
 }
 
-func (c *Client) ListFileVersions(bucketId string, opt *ListFileVersionsOptions) (ListFileVersionsResponse, error) {
+func (c *Client) ListFileVersions(ctx context.Context, bucketId string, opt *ListFileVersionsOptions) (ListFileVersionsResponse, error) {
 	type request struct {
 		BucketId      string `json:"bucketId"`
 		StartFileName string `json:"startFileName,omitempty"`
@@ -690,7 +710,7 @@ func (c *Client) ListFileVersions(bucketId string, opt *ListFileVersionsOptions)
 		o = *opt
 	}
 
-	req, err := c.authRequest("POST", "/b2api/v2/b2_list_file_versions", &request{
+	req, err := c.authRequest(ctx, "POST", "/b2api/v2/b2_list_file_versions", &request{
 		bucketId,
 		o.StartFileName,
 		o.StartFileId,
@@ -712,7 +732,7 @@ type ListKeysOptions struct {
 	StartAppKeyId string // optional, first key to return for paginated results
 }
 
-func (c *Client) ListKeys(opt ListKeysOptions) (ListKeysResponse, error) {
+func (c *Client) ListKeys(ctx context.Context, opt ListKeysOptions) (ListKeysResponse, error) {
 	type request struct {
 		AccountId             string `json:"accountId"`
 		MaxKeyCount           int    `json:"maxKeyCount"`
@@ -724,7 +744,7 @@ func (c *Client) ListKeys(opt ListKeysOptions) (ListKeysResponse, error) {
 		return ListKeysResponse{}, ErrAuthTokenMissing
 	}
 
-	req, err := c.authRequest("POST", "/b2api/v2/b2_list_keys", &request{
+	req, err := c.authRequest(ctx, "POST", "/b2api/v2/b2_list_keys", &request{
 		auth.AccountID,
 		opt.MaxKeyCount,
 		opt.StartAppKeyId,
@@ -743,14 +763,14 @@ type ListPartsOptions struct {
 	MaxPartCount    *int // optional, first key to return for paginated results
 }
 
-func (c *Client) ListParts(fileId string, opt ListPartsOptions) (ListPartsResponse, error) {
+func (c *Client) ListParts(ctx context.Context, fileId string, opt ListPartsOptions) (ListPartsResponse, error) {
 	type request struct {
 		FileId          string `json:"fileId"`
 		StartPartNumber *int   `json:"startPartNumber,omitempty"`
 		MaxPartCount    *int   `json:"maxPartCount,omitempty"`
 	}
 
-	req, err := c.authRequest("POST", "/b2api/v2/b2_list_parts", &request{
+	req, err := c.authRequest(ctx, "POST", "/b2api/v2/b2_list_parts", &request{
 		fileId,
 		opt.StartPartNumber,
 		opt.MaxPartCount,
@@ -770,7 +790,7 @@ type ListUnfinishedLargeFilesOptions struct {
 	MaxFileCount int    // optional, max number of files to return, default is 100, max is 100
 }
 
-func (c *Client) ListUnfinishedLargeFiles(bucketId string, opt ListUnfinishedLargeFilesOptions) (ListUnfinishedLargeFilesResponse, error) {
+func (c *Client) ListUnfinishedLargeFiles(ctx context.Context, bucketId string, opt ListUnfinishedLargeFilesOptions) (ListUnfinishedLargeFilesResponse, error) {
 	type request struct {
 		BucketId     string `json:"bucketId"`
 		NamePrefix   string `json:"namePrefix"`
@@ -778,7 +798,7 @@ func (c *Client) ListUnfinishedLargeFiles(bucketId string, opt ListUnfinishedLar
 		MaxPartCount int    `json:"maxPartCount"`
 	}
 
-	req, err := c.authRequest("POST", "/b2api/v2/b2_list_unfinished_large_files", &request{
+	req, err := c.authRequest(ctx, "POST", "/b2api/v2/b2_list_unfinished_large_files", &request{
 		bucketId,
 		opt.NamePrefix,
 		opt.StartFileId,
@@ -793,7 +813,7 @@ func (c *Client) ListUnfinishedLargeFiles(bucketId string, opt ListUnfinishedLar
 	return r, err
 }
 
-func (c *Client) StartLargeFile(bucketId, fileName, contentType string, fileInfo *FileInfo) (StartLargeFileResponse, error) {
+func (c *Client) StartLargeFile(ctx context.Context, bucketId, fileName, contentType string, fileInfo *FileInfo) (StartLargeFileResponse, error) {
 	type request struct {
 		BucketId    string    `json:"bucketId"`
 		FileName    string    `json:"namePrefix"`
@@ -801,7 +821,7 @@ func (c *Client) StartLargeFile(bucketId, fileName, contentType string, fileInfo
 		FileInfo    *FileInfo `json:"fileInfo,omitempty"`
 	}
 
-	req, err := c.authRequest("POST", "/b2api/v2/b2_list_unfinished_large_files", &request{
+	req, err := c.authRequest(ctx, "POST", "/b2api/v2/b2_list_unfinished_large_files", &request{
 		bucketId,
 		fileName,
 		contentType,
@@ -824,7 +844,7 @@ type UpdateBucketOptions struct {
 	IfRevisionIs   *int            // optional
 }
 
-func (c *Client) UpdateBucket(bucketId string, opt UpdateBucketOptions) (UpdateBucketResponse, error) {
+func (c *Client) UpdateBucket(ctx context.Context, bucketId string, opt UpdateBucketOptions) (UpdateBucketResponse, error) {
 	type request struct {
 		AccountId      string          `json:"accountId"`
 		BucketId       string          `json:"bucketId"`
@@ -840,7 +860,7 @@ func (c *Client) UpdateBucket(bucketId string, opt UpdateBucketOptions) (UpdateB
 		return UpdateBucketResponse{}, ErrAuthTokenMissing
 	}
 
-	req, err := c.authRequest("POST", "/b2api/v2/b2_update_bucket", &request{
+	req, err := c.authRequest(ctx, "POST", "/b2api/v2/b2_update_bucket", &request{
 		auth.AccountID,
 		bucketId,
 		opt.BucketType,
@@ -861,7 +881,7 @@ func (c *Client) UpdateBucket(bucketId string, opt UpdateBucketOptions) (UpdateB
 type UploadFileOptions struct {
 	FileName      string        // required
 	ContentType   string        // required, use ContentTypeHide to hide, empty defaults to auto
-	ContentLength int64         // required
+	ContentLength int64         // required, use ContentLengthDetermineUsingTempStorage to determine it using temp storage
 	Body          io.ReadCloser // required
 
 	ContentSha1 string // required, leave empty to interpret from body
@@ -876,8 +896,8 @@ type UploadFileOptions struct {
 	ExtraHeaders        map[string]string // extra headers to add, currently must be prefixed with "X-Bz-Info-*" and * should use underscores over hyphens
 }
 
-func (c *Client) UploadFile(uploadURL, authToken string, opt UploadFileOptions) (UploadFileResponse, error) {
-	req, err := c.uploadRequest(uploadURL, authToken)
+func (c *Client) UploadFile(ctx context.Context, uploadURL, authToken string, opt UploadFileOptions) (UploadFileResponse, error) {
+	req, err := c.uploadRequest(ctx, uploadURL, authToken)
 	if err != nil {
 		return UploadFileResponse{}, err
 	}
@@ -980,8 +1000,8 @@ type UploadFilePartOptions struct {
 	ContentSha1   string        // required, sha1 of the part being uploaded, leave empty to interpret from body
 }
 
-func (c *Client) UploadPart(uploadPartURL, uploadPartAuthToken string, opt UploadFilePartOptions) (UploadPartResponse, error) {
-	req, err := c.uploadRequest(uploadPartURL, uploadPartAuthToken)
+func (c *Client) UploadPart(ctx context.Context, uploadPartURL, uploadPartAuthToken string, opt UploadFilePartOptions) (UploadPartResponse, error) {
+	req, err := c.uploadRequest(ctx, uploadPartURL, uploadPartAuthToken)
 	if err != nil {
 		return UploadPartResponse{}, err
 	}
